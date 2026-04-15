@@ -3,12 +3,15 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 interface User {
   email: string;
   name: string;
+  picture?: string;
+  provider?: 'email' | 'google';
 }
 
 interface AuthContextType {
   user: User | null;
   login: (email: string, password: string) => Promise<void>;
   signup: (email: string, name: string, password: string) => Promise<void>;
+  googleLogin: (googleUser: { email: string; name: string; picture?: string }) => void;
   logout: () => void;
 }
 
@@ -39,7 +42,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     setUser({
       email,
-      name: email.split('@')[0], // Use part of email as name for demo
+      name: email.split('@')[0],
+      provider: 'email',
     });
   };
 
@@ -51,7 +55,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error('Password must be at least 6 characters');
     }
 
-    setUser({ email, name });
+    setUser({ email, name, provider: 'email' });
+  };
+
+  const googleLogin = (googleUser: { email: string; name: string; picture?: string }) => {
+    setUser({
+      email: googleUser.email,
+      name: googleUser.name,
+      picture: googleUser.picture,
+      provider: 'google',
+    });
   };
 
   const logout = () => {
@@ -59,7 +72,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, signup, logout }}>
+    <AuthContext.Provider value={{ user, login, signup, googleLogin, logout }}>
       {children}
     </AuthContext.Provider>
   );
@@ -71,4 +84,4 @@ export function useAuth() {
     throw new Error('useAuth must be used within an AuthProvider');
   }
   return context;
-}
+}

@@ -1,5 +1,22 @@
-import React, { useMemo, useRef, useState, useEffect } from 'react';
-import { MessageCircle, Send, X, Scale, Gavel, BookOpen, GraduationCap, Shield, Zap, FileText, Briefcase } from 'lucide-react';
+import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react';
+import { 
+  MessageCircle, 
+  Send, 
+  X, 
+  Scale, 
+  Gavel, 
+  BookOpen, 
+  GraduationCap, 
+  Shield, 
+  Zap, 
+  FileText, 
+  Briefcase,
+  Mic,
+  MicOff,
+  Volume2,
+  VolumeX,
+  Globe
+} from 'lucide-react';
 
 type ChatMessage = {
   id: string;
@@ -7,7 +24,17 @@ type ChatMessage = {
   content: string;
 };
 
+type LanguageCodes = 'en-IN' | 'hi-IN' | 'te-IN';
+
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5002';
+
+// Browser specific types for SpeechRecognition
+declare global {
+  interface Window {
+    SpeechRecognition: any;
+    webkitSpeechRecognition: any;
+  }
+}
 
 export default function ChatWidget() {
   const [isOpen, setIsOpen] = useState(false);
@@ -23,20 +50,63 @@ export default function ChatWidget() {
   const [isPulsing, setIsPulsing] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
 
+  // Multilingual & Voice State
+  const [language, setLanguage] = useState<LanguageCodes>('en-IN');
+  const [isListening, setIsListening] = useState(false);
+  const [isMuted, setIsMuted] = useState(false); // for TTS
+
+  const recognitionRef = useRef<any>(null);
+
   const historyPayload = useMemo(
     () =>
       messages.map(m => ({ role: m.role, content: m.content })).slice(-10),
     [messages]
   );
 
+  // Setup Web Speech API for Speech-to-Text
+  useEffect(() => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      
+      recognition.onresult = (event: any) => {
+        const transcript = event.results[0][0].transcript;
+        setInput(transcript);
+        setIsListening(false);
+      };
+
+      recognition.onerror = (event: any) => {
+        console.error("Speech recognition error", event.error);
+        setIsListening(false);
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+      };
+      
+      recognitionRef.current = recognition;
+    }
+  }, []);
+
+  // Update language of SpeechRecognition when it changes
+  useEffect(() => {
+    if (recognitionRef.current) {
+      recognitionRef.current.lang = language;
+    }
+  }, [language]);
+
   // Pulse animation for the button
   useEffect(() => {
     const interval = setInterval(() => {
-      setIsPulsing(true);
-      setTimeout(() => setIsPulsing(false), 1000);
+      if (!isOpen) {
+        setIsPulsing(true);
+        setTimeout(() => setIsPulsing(false), 1000);
+      }
     }, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [isOpen]);
 
   const scrollToBottom = () => {
     requestAnimationFrame(() => {
@@ -44,9 +114,52 @@ export default function ChatWidget() {
     });
   };
 
+  const toggleListen = () => {
+    if (!recognitionRef.current) {
+      alert("Your browser does not support Speech Recognition.");
+      return;
+    }
+    if (isListening) {
+      recognitionRef.current.stop();
+      setIsListening(false);
+    } else {
+      try {
+        recognitionRef.current.start();
+        setIsListening(true);
+      } catch (err) {
+        console.error("Could not start speech recognition:", err);
+      }
+    }
+  };
+
+  const speakText = useCallback((text: string) => {
+    if (!('speechSynthesis' in window) || isMuted) return;
+    
+    // Stop any ongoing speech
+    window.speechSynthesis.cancel();
+    
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = language;
+    
+    // Attempt to pick a voice matching the language if available
+    const voices = window.speechSynthesis.getVoices();
+    const targetVoice = voices.find(v => v.lang.startsWith(language.split('-')[0]));
+    if (targetVoice) {
+      utterance.voice = targetVoice;
+    }
+    
+    window.speechSynthesis.speak(utterance);
+  }, [language, isMuted]);
+
   const sendMessage = async () => {
     const trimmed = input.trim();
     if (!trimmed || isLoading) return;
+
+    // Stop listening if sending
+    if (isListening && recognitionRef.current) {
+      recognitionRef.current.stop();
+      setIsListening(false);
+    }
 
     const userMsg: ChatMessage = { id: `m-${Date.now()}`, role: 'user', content: trimmed };
     setMessages(prev => [...prev, userMsg]);
@@ -54,11 +167,14 @@ export default function ChatWidget() {
     setIsLoading(true);
     scrollToBottom();
 
+    // Cancel current speech when user sends a new message
+    window.speechSynthesis?.cancel();
+
     try {
       const res = await fetch(`${BACKEND_URL}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: trimmed, history: historyPayload }),
+        body: JSON.stringify({ message: trimmed, history: historyPayload, language }),
       });
       let data: any = null;
       try {
@@ -74,9 +190,11 @@ export default function ChatWidget() {
       
       // Simulate typing effect
       await typewriterEffect(reply);
+      speakText(reply);
     } catch (e: any) {
       const errMsg = e?.message ? `I apologize for the inconvenience: ${e.message}` : 'I am currently experiencing technical difficulties. Please try again in a moment.';
       await typewriterEffect(errMsg);
+      speakText(errMsg);
     } finally {
       setIsLoading(false);
       scrollToBottom();
@@ -95,7 +213,7 @@ export default function ChatWidget() {
         msg.id === messageId ? { ...msg, content: displayedText } : msg
       ));
       scrollToBottom();
-      await new Promise(resolve => setTimeout(resolve, 20)); // Typing speed
+      await new Promise(resolve => setTimeout(resolve, 15)); // Typing speed
     }
   };
 
@@ -131,7 +249,7 @@ export default function ChatWidget() {
           <MessageCircle className="w-7 h-7 animate-bounce" style={{ animationDuration: '2s' }} />
           
           {/* Tooltip */}
-          <div className="absolute bottom-full mb-3 right-0 bg-gradient-to-r from-blue-700 to-purple-700 text-white text-sm px-4 py-2 rounded-xl opacity-0 group-hover:opacity-100 transition-all duration-300 whitespace-nowrap shadow-lg transform group-hover:-translate-y-1">
+          <div className="absolute bottom-full mb-3 right-0 bg-gradient-to-r from-blue-700 to-purple-700 text-white text-sm px-4 py-2 rounded-xl opacity-0 group-hover:opacity-100 transition-all duration-300 whitespace-nowrap shadow-lg transform group-hover:-translate-y-1 z-50">
             <Zap className="w-4 h-4 inline mr-2 animate-pulse" />
             Free Legal Consultation
             <div className="absolute top-full right-4 border-8 border-transparent border-t-purple-700"></div>
@@ -176,7 +294,7 @@ export default function ChatWidget() {
 
           {/* Header */}
           <div className="relative bg-gradient-to-r from-blue-600/80 to-purple-600/80 text-white px-6 py-4 border-b border-white/10 backdrop-blur-sm z-20">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-3">
                 <div className="p-2 bg-white/20 rounded-xl animate-pulse">
                   <Scale className="w-6 h-6" />
@@ -194,13 +312,42 @@ export default function ChatWidget() {
                   </div>
                 </div>
               </div>
-              <button
-                className="p-2 rounded-xl hover:bg-white/10 transition-all duration-300 hover:rotate-90"
-                aria-label="Close consultation"
-                onClick={() => setIsOpen(false)}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    setIsMuted(!isMuted);
+                    if (!isMuted) window.speechSynthesis?.cancel();
+                  }}
+                  className="p-2 rounded-xl hover:bg-white/10 transition-all duration-300 bg-white/5"
+                  title={isMuted ? "Unmute Voice" : "Mute Voice"}
+                >
+                  {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                </button>
+                <button
+                  className="p-2 rounded-xl hover:bg-white/10 transition-all duration-300 hover:rotate-90 bg-white/5"
+                  aria-label="Close consultation"
+                  onClick={() => setIsOpen(false)}
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Language Selector */}
+            <div className="flex items-center justify-between text-sm bg-black/20 rounded-lg p-1 border border-white/10">
+              <div className="flex items-center gap-2 pl-2 text-white/80">
+                <Globe className="w-4 h-4" />
+                <span>Language:</span>
+              </div>
+              <select
+                value={language}
+                onChange={(e) => setLanguage(e.target.value as LanguageCodes)}
+                className="bg-transparent border-none text-white focus:outline-none focus:ring-0 cursor-pointer text-right min-w-[120px]"
               >
-                <X className="w-5 h-5" />
-              </button>
+                <option className="text-slate-900" value="en-IN">English (India)</option>
+                <option className="text-slate-900" value="hi-IN">हिन्दी (Hindi)</option>
+                <option className="text-slate-900" value="te-IN">తెలుగు (Telugu)</option>
+              </select>
             </div>
           </div>
 
@@ -213,18 +360,28 @@ export default function ChatWidget() {
                 style={{ animationDelay: `${index * 0.1}s` }}
               >
                 <div
-                  className={`max-w-[80%] px-4 py-3 rounded-2xl whitespace-pre-wrap break-words shadow-lg backdrop-blur-sm transform transition-all duration-300 hover:scale-105 border ${
+                  className={`max-w-[80%] px-4 py-3 rounded-2xl whitespace-pre-wrap break-words shadow-lg backdrop-blur-sm transform transition-all duration-300 hover:scale-[1.02] border ${
                     m.role === 'user' 
                       ? 'bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-br-none border-blue-400/30' 
                       : 'bg-white/10 text-white border-white/20 rounded-bl-none'
                   }`}
                 >
                   {m.role === 'assistant' && (
-                    <div className="flex items-center gap-2 mb-2 pb-2 border-b border-white/20">
-                      <div className="p-1 bg-white/20 rounded-lg">
-                        <GraduationCap className="w-3 h-3 text-white" />
+                    <div className="flex items-center justify-between gap-2 mb-2 pb-2 border-b border-white/20">
+                      <div className="flex items-center gap-2">
+                        <div className="p-1 bg-white/20 rounded-lg">
+                          <GraduationCap className="w-3 h-3 text-white" />
+                        </div>
+                        <span className="text-xs font-semibold text-blue-200">Legal Counsel</span>
                       </div>
-                      <span className="text-xs font-semibold text-blue-200">Legal Counsel</span>
+                      {/* Optional replay button for the message */}
+                      <button 
+                        onClick={() => speakText(m.content)}
+                        title="Replay Voice" 
+                        className="text-white/40 hover:text-white/90 transition-colors"
+                      >
+                        <Volume2 className="w-3 h-3" />
+                      </button>
                     </div>
                   )}
                   {m.content}
@@ -250,9 +407,11 @@ export default function ChatWidget() {
           {/* Suggested Questions */}
           {messages.length <= 1 && (
             <div className="px-5 pb-3 relative z-20">
-              <div className="text-xs text-blue-300 font-medium mb-3 flex items-center gap-2">
-                <Zap className="w-3 h-3 animate-pulse" />
-                QUICK LEGAL INQUIRIES
+               <div className="text-xs text-blue-300 font-medium mb-3 flex items-center justify-between gap-2">
+                <span className="flex items-center gap-2">
+                  <Zap className="w-3 h-3 animate-pulse" />
+                  QUICK LEGAL INQUIRIES
+                </span>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 {suggestedQuestions.map(({ text, icon: Icon }, index) => (
@@ -264,8 +423,8 @@ export default function ChatWidget() {
                     }}
                     className="text-left p-3 bg-white/5 border border-white/10 rounded-xl text-xs text-white/80 hover:bg-white/10 hover:border-white/20 hover:text-white hover:scale-105 transition-all duration-300 backdrop-blur-sm flex items-center gap-2 group"
                   >
-                    <Icon className="w-3 h-3 group-hover:scale-110 transition-transform" />
-                    {text}
+                    <Icon className="w-3 h-3 flex-shrink-0 group-hover:scale-110 transition-transform" />
+                    <span className="truncate">{text}</span>
                   </button>
                 ))}
               </div>
@@ -273,30 +432,43 @@ export default function ChatWidget() {
           )}
 
           {/* Input Area */}
-          <div className="p-4 border-t border-white/10 bg-black/20 backdrop-blur-sm relative z-20">
+          <div className="p-4 border-t border-white/10 bg-black/40 backdrop-blur-xl relative z-20">
             <div className="flex items-end gap-2">
               <div className="flex-1 relative">
                 <input
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={onKeyDown}
-                  placeholder="Describe your legal matter or ask a question..."
-                  className="w-full border border-white/20 bg-white/5 text-white rounded-xl px-4 py-3 pr-12 outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder-white/40 backdrop-blur-sm transition-all duration-300"
+                  placeholder={isListening ? "Listening..." : "Ask your legal question..."}
+                  className={`w-full border border-white/20 text-white rounded-xl px-4 py-3 pr-10 outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder-white/40 transition-all duration-300 ${
+                    isListening ? 'bg-blue-500/20' : 'bg-white/5'
+                  }`}
                 />
-                <BookOpen className="absolute right-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-white/40" />
+                
+                {/* Voice Input Button */}
+                <button
+                  onClick={toggleListen}
+                  type="button"
+                  className={`absolute right-2 top-1/2 transform -translate-y-1/2 p-2 rounded-lg transition-colors ${
+                    isListening ? 'text-red-400 hover:text-red-300 bg-red-400/20 animate-pulse' : 'text-white/40 hover:text-white hover:bg-white/10'
+                  }`}
+                  title={isListening ? "Stop Listening" : "Voice Input"}
+                >
+                  {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                </button>
               </div>
+              
               <button
                 onClick={sendMessage}
                 disabled={isLoading || !input.trim()}
-                className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 disabled:opacity-30 text-white px-4 py-3 rounded-xl flex items-center gap-2 transition-all duration-300 shadow-lg hover:shadow-blue-500/25 disabled:shadow-none hover:scale-105 disabled:hover:scale-100 backdrop-blur-sm"
+                className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 disabled:opacity-30 text-white px-4 py-3 rounded-xl flex items-center justify-center transition-all duration-300 shadow-lg hover:shadow-blue-500/25 disabled:shadow-none hover:scale-105 disabled:hover:scale-100"
               >
-                <Send className="w-4 h-4" />
-                <span className="font-medium">Send</span>
+                <Send className="w-5 h-5" />
               </button>
             </div>
-            <div className="text-xs text-white/60 mt-2 text-center flex items-center justify-center gap-2">
+            <div className="text-xs text-white/50 mt-2 text-center flex items-center justify-center gap-1.5">
               <Shield className="w-3 h-3" />
-              All consultations are confidential and secure
+              Voice data is not stored permanently.
             </div>
           </div>
         </div>
@@ -316,13 +488,13 @@ export default function ChatWidget() {
           to { transform: translateY(0); opacity: 1; }
         }
         .animate-slide-up {
-          animation: slide-up 0.5s ease-out;
+          animation: slide-up 0.5s cubic-bezier(0.16, 1, 0.3, 1);
         }
         .animate-float {
           animation: float 6s ease-in-out infinite;
         }
         .animate-message-in {
-          animation: message-in 0.3s ease-out;
+          animation: message-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
         }
       `}</style>
     </div>

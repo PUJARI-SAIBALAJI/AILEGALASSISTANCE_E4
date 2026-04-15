@@ -16,6 +16,7 @@ import {
   Sparkles,
   Crown,
   Target,
+  ScrollText,
   BarChart3
 } from 'lucide-react';
 
@@ -68,8 +69,29 @@ const features = [
     path: '/find-lawyer',
     gradient: 'bg-gradient-to-br from-amber-50 to-orange-50',
     stats: '500+ experts'
+  },
+  {
+    icon: Target,
+    title: 'Case Predictor',
+    description: 'AI-powered win probability and outcome prediction',
+    color: 'from-indigo-500 to-purple-600',
+    iconColor: 'text-indigo-600',
+    path: '/predict',
+    gradient: 'bg-gradient-to-br from-indigo-50 to-purple-50',
+    stats: 'Groq llama-3.3 powered'
+  },
+  {
+    icon: ScrollText,
+    title: 'Document Generator',
+    description: 'Instantly draft legal contracts and notices with AI',
+    color: 'from-teal-500 to-emerald-600',
+    iconColor: 'text-teal-600',
+    path: '/generate-document',
+    gradient: 'bg-gradient-to-br from-teal-50 to-emerald-50',
+    stats: 'Customizable formats'
   }
 ];
+
 
 const stats = [
   { 
